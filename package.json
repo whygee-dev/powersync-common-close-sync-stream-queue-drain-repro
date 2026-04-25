@@ -1,0 +1,17 @@
+{
+  "name": "powersync-common-close-sync-stream-queue-drain-repro",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal repro for @powersync/common continuing to drain queued control commands after CloseSyncStream.",
+  "scripts": {
+    "test": "node repro.mjs",
+    "repro": "node repro.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@powersync/common": "1.52.0"
+  }
+}
