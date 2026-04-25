@@ -4,25 +4,21 @@ This repo contains a minimal Node repro for a sync iteration lifecycle issue in 
 
 In `AbstractStreamingSyncImplementation.rustSyncIteration()`, `CloseSyncStream` closes the current iteration, but the JavaScript side can still process already-queued injected `controlInvocations`. Those commands may then be forwarded to `powersync_control(...)` after the iteration is no longer active.
 
-`rustSyncIteration()` is private and depends on the PowerSync core adapter, so this repro isolates the relevant queue-drain behavior.
+The repro calls the real exported `AbstractStreamingSyncImplementation` class and invokes its runtime `rustSyncIteration()` method with a minimal fake adapter and remote.
 
 ## Reproduce
 
 ```sh
+npm install
 npm test
 ```
-
-The script runs two variants:
-
-- broken: aborts on `CloseSyncStream` but can keep processing the existing queue
-- fixed: marks close as terminal and breaks the queue drain
 
 Expected output:
 
 ```text
-broken error: powersync_control: invalid state: No iteration is active; command=update_subscriptions
-fixed control calls: [ 'line_binary:first_line' ]
-reproduced: queued commands are invalid once CloseSyncStream has closed the iteration
+control calls: [ 'start', 'line_text', 'update_subscriptions', 'stop' ]
+error: powersync_control: invalid state: No iteration is active; command=update_subscriptions
+reproduced with the real @powersync/common AbstractStreamingSyncImplementation.rustSyncIteration()
 ```
 
 ## Expected

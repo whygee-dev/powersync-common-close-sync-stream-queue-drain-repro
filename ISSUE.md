@@ -21,18 +21,19 @@ Minimal repro repo:
 ```sh
 git clone https://github.com/whygee-dev/powersync-common-close-sync-stream-queue-drain-repro.git
 cd powersync-common-close-sync-stream-queue-drain-repro
+npm install
 npm test
 ```
 
 Observed output:
 
 ```text
-broken error: powersync_control: invalid state: No iteration is active; command=update_subscriptions
-fixed control calls: [ 'line_binary:first_line' ]
-reproduced: queued commands are invalid once CloseSyncStream has closed the iteration
+control calls: [ 'start', 'line_text', 'update_subscriptions', 'stop' ]
+error: powersync_control: invalid state: No iteration is active; command=update_subscriptions
+reproduced with the real @powersync/common AbstractStreamingSyncImplementation.rustSyncIteration()
 ```
 
-The repro isolates the queue-drain behavior because `rustSyncIteration()` is private and depends on the PowerSync core adapter.
+The repro uses the real exported `AbstractStreamingSyncImplementation` class and invokes its runtime `rustSyncIteration()` method with a minimal fake adapter and remote. The adapter queues a subscription update through the real `updateSubscriptions()` path while handling the first sync line, then returns `CloseSyncStream`.
 
 ## Expected behavior
 

@@ -1,144 +1,122 @@
 import assert from 'node:assert/strict';
+import {
+  AbstractStreamingSyncImplementation,
+  PowerSyncControlCommand,
+  SyncStreamConnectionMethod
+} from '@powersync/common';
 
-class InjectableIterator {
-  #items;
+let sync;
+let iterationActive = true;
 
-  constructor(items) {
-    this.#items = [...items];
-  }
+const controlCalls = [];
 
-  inject(item) {
-    this.#items.push(item);
-  }
+const logger = {
+  warn() {},
+  debug() {},
+  info() {},
+  error() {},
+  trace() {}
+};
 
-  async next() {
-    await Promise.resolve();
+const adapter = {
+  registerListener() {
+    return () => {};
+  },
 
-    if (this.#items.length === 0) {
-      return { done: true };
-    }
+  async control(command, payload) {
+    controlCalls.push(command);
 
-    return { done: false, value: this.#items.shift() };
-  }
-}
-
-function createAdapter() {
-  let iterationActive = true;
-  const calls = [];
-
-  return {
-    calls,
-    async control(command, payload = null) {
-      calls.push(command);
-
-      if (!iterationActive) {
-        throw new Error(`powersync_control: invalid state: No iteration is active; command=${command}`);
-      }
-
-      if (command === 'line_binary:first_line') {
-        iterationActive = false;
-        return JSON.stringify([{ CloseSyncStream: { hide_disconnect: false } }]);
-      }
-
+    if (command === PowerSyncControlCommand.STOP) {
       return JSON.stringify([]);
     }
-  };
-}
 
-async function runBrokenQueueDrain() {
-  const adapter = createAdapter();
-  const controller = new AbortController();
-  let controlInvocations = new InjectableIterator([
-    { command: 'line_binary:first_line' },
-    { command: 'update_subscriptions' },
-    { command: 'completed_upload' }
-  ]);
+    if (!iterationActive) {
+      throw new Error(`powersync_control: invalid state: No iteration is active; command=${command}`);
+    }
 
-  async function control(command, payload) {
-    const rawResponse = await adapter.control(command, payload);
-    const instructions = JSON.parse(rawResponse);
+    if (command === PowerSyncControlCommand.START) {
+      return JSON.stringify([
+        {
+          EstablishSyncStream: {
+            request: {
+              path: '/sync/stream',
+              payload
+            }
+          }
+        }
+      ]);
+    }
 
-    for (const instruction of instructions) {
-      if ('CloseSyncStream' in instruction) {
-        // This matches the problematic lifecycle: the iteration is aborted,
-        // but the already-created iterator is still drained by the loop.
-        controller.abort();
+    if (command === PowerSyncControlCommand.PROCESS_TEXT_LINE) {
+      // Queue an app-side subscription change before the core closes this
+      // iteration. This uses the real SDK updateSubscriptions() path, which
+      // injects UPDATE_SUBSCRIPTIONS into rustSyncIteration's control queue.
+      sync.updateSubscriptions([{ name: 'queued_after_close', params: null }]);
+      iterationActive = false;
+
+      return JSON.stringify([{ CloseSyncStream: { hide_disconnect: false } }]);
+    }
+
+    return JSON.stringify([]);
+  }
+};
+
+const remote = {
+  async fetchStream() {
+    let emittedFirstLine = false;
+
+    return {
+      async next() {
+        if (emittedFirstLine) {
+          return { done: true };
+        }
+
+        emittedFirstLine = true;
+        return { done: false, value: 'first sync line' };
       }
-    }
+    };
+  },
+  invalidateCredentials() {},
+  async fetchCredentials() {
+    return {};
   }
+};
 
-  while (true) {
-    const event = await controlInvocations.next();
-    if (event.done) {
-      break;
-    }
+sync = new AbstractStreamingSyncImplementation({
+  adapter,
+  remote,
+  logger,
+  subscriptions: [],
+  crudUploadThrottleMs: 60_000
+});
 
-    await control(event.value.command, event.value.payload);
-  }
+sync.triggerCrudUpload = () => {};
 
-  return adapter.calls;
-}
-
-async function runFixedQueueDrain() {
-  const adapter = createAdapter();
-  const controller = new AbortController();
-  let closeRequested = false;
-  let controlInvocations = new InjectableIterator([
-    { command: 'line_binary:first_line' },
-    { command: 'update_subscriptions' },
-    { command: 'completed_upload' }
-  ]);
-
-  async function control(command, payload) {
-    const rawResponse = await adapter.control(command, payload);
-    const instructions = JSON.parse(rawResponse);
-
-    for (const instruction of instructions) {
-      if ('CloseSyncStream' in instruction) {
-        closeRequested = true;
-        controlInvocations = null;
-        controller.abort();
-      }
-    }
-  }
-
-  while (controlInvocations != null) {
-    const event = await controlInvocations.next();
-    if (event.done) {
-      break;
-    }
-
-    await control(event.value.command, event.value.payload);
-
-    if (closeRequested || controller.signal.aborted) {
-      break;
-    }
-  }
-
-  return adapter.calls;
-}
-
-let brokenError;
+let error;
 try {
-  await runBrokenQueueDrain();
-} catch (error) {
-  brokenError = error;
+  await sync.rustSyncIteration(new AbortController().signal, {
+    connectionMethod: SyncStreamConnectionMethod.HTTP,
+    includeDefaultStreams: true,
+    params: null,
+    appMetadata: null
+  });
+} catch (caught) {
+  error = caught;
 }
 
-const fixedCalls = await runFixedQueueDrain();
-
-console.log('broken error:', brokenError?.message);
-console.log('fixed control calls:', fixedCalls);
+console.log('control calls:', controlCalls);
+console.log('error:', error?.message);
 
 assert.match(
-  brokenError?.message ?? '',
+  error?.message ?? '',
   /powersync_control: invalid state: No iteration is active/,
-  'broken loop forwards a queued command after CloseSyncStream'
+  'real rustSyncIteration() forwarded a queued UPDATE_SUBSCRIPTIONS command after CloseSyncStream'
 );
-assert.deepEqual(
-  fixedCalls,
-  ['line_binary:first_line'],
-  'fixed loop stops after CloseSyncStream and does not drain stale queued commands'
-);
+assert.deepEqual(controlCalls, [
+  PowerSyncControlCommand.START,
+  PowerSyncControlCommand.PROCESS_TEXT_LINE,
+  PowerSyncControlCommand.UPDATE_SUBSCRIPTIONS,
+  PowerSyncControlCommand.STOP
+]);
 
-console.log('reproduced: queued commands are invalid once CloseSyncStream has closed the iteration');
+console.log('reproduced with the real @powersync/common AbstractStreamingSyncImplementation.rustSyncIteration()');
