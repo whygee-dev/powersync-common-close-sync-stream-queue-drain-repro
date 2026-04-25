@@ -30,10 +30,10 @@ Observed output:
 ```text
 control calls: [ 'start', 'line_text', 'update_subscriptions', 'stop' ]
 error: powersync_control: invalid state: No iteration is active; command=update_subscriptions
-reproduced with the real @powersync/common AbstractStreamingSyncImplementation.rustSyncIteration()
+reproduced: queued subscription update processed after CloseSyncStream
 ```
 
-The repro uses the real exported `AbstractStreamingSyncImplementation` class and invokes its runtime `rustSyncIteration()` method with a minimal fake adapter and remote. The adapter queues a subscription update through the real `updateSubscriptions()` path while handling the first sync line, then returns `CloseSyncStream`.
+The repro uses `AbstractStreamingSyncImplementation` with a minimal adapter and remote. The adapter queues a subscription update through `updateSubscriptions()` while handling the first sync line, then returns `CloseSyncStream`.
 
 ## Expected behavior
 

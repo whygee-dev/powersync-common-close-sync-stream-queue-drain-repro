@@ -49,8 +49,8 @@ const adapter = {
 
     if (command === PowerSyncControlCommand.PROCESS_TEXT_LINE) {
       // Queue an app-side subscription change before the core closes this
-      // iteration. This uses the real SDK updateSubscriptions() path, which
-      // injects UPDATE_SUBSCRIPTIONS into rustSyncIteration's control queue.
+      // iteration. updateSubscriptions() injects UPDATE_SUBSCRIPTIONS into
+      // rustSyncIteration's control queue.
       sync.updateSubscriptions([{ name: 'queued_after_close', params: null }]);
       iterationActive = false;
 
@@ -119,4 +119,4 @@ assert.deepEqual(controlCalls, [
   PowerSyncControlCommand.STOP
 ]);
 
-console.log('reproduced with the real @powersync/common AbstractStreamingSyncImplementation.rustSyncIteration()');
+console.log('reproduced: queued subscription update processed after CloseSyncStream');
